@@ -8,10 +8,32 @@
 //   Teensy 3.5:  1, 5, 8, 10, 26, 32, 33, 48
 //   Teensy 3.6:  1, 5, 8, 10, 26, 32, 33
 
-byte drawingMemory[NUMPIXELS * 3];       //  3 bytes per LED
-DMAMEM byte displayMemory[NUMPIXELS * 12]; // 12 bytes per LED
+byte drawingMemory[NUMPIXELS * 4];       //  4 bytes per LED
+DMAMEM byte displayMemory[NUMPIXELS * 16]; // 16 bytes per LED
 
-WS2812Serial leds(NUMPIXELS, displayMemory, drawingMemory, LEDPIN, WS2812_GRB);
+WS2812Serial leds(NUMPIXELS, displayMemory, drawingMemory, LEDPIN, WS2812_GRBW);
+
+uint8_t sprite[] = {23, 15, 9, 4, 2, 1}; // shape of sprite in brightness values (0-31)
+
+uint8_t paletteA[COLOURS][4] = { // initialise the colour palette array for vector 0 {r,g,b,w} (0-7)
+  {0, 1, 2, 1}, //  {0, 0, 2, 1},
+  {0, 1, 2, 1}, //  {0, 0, 1, 0},
+  {0, 1, 2, 1}, // {0, 1, 1, 0},
+  {0, 1, 2, 1}, // {0, 1, 1, 1},
+  {0, 1, 2, 1}, // {0, 2, 1, 1},
+  {0, 1, 2, 1},  // {0, 1, 2, 1};
+  {0, 1, 2, 1}, // {0, 0, 0, 1},
+};
+uint8_t paletteB[COLOURS][4] = { // initialise the colour palette array for vector 1 {r,g,b,w} (0-7)
+  {1, 1, 0, 1}, //  {0, 2, 0, 1},
+  {1, 1, 0, 1}, //  {0, 1, 0, 1},
+  {1, 1, 0, 1}, //  {1, 1, 0, 0},
+  {1, 1, 0, 1}, //  {1, 1, 0, 1},
+  {1, 1, 0, 1}, //  {2, 1, 0, 1},
+  {1, 1, 0, 1}, //  {1, 2, 0, 1},
+  {1, 1, 0, 1}, //  {0, 0, 0, 1},
+};
+uint8_t paletteC[4] = {2, 0, 0, 0}; // initialise the colour palette array for collisions {r,g,b,w} (0-7)
 
 byte gammaArray[] = {
   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
@@ -34,15 +56,14 @@ byte gammaArray[] = {
 
 void pixelsSetup() {
   leds.begin();
+  leds.setBrightness(200); // 0=off, 255=brightest
 }
 
-
-void pixelBar(int i, int k) { // bar (brightness, length)
-  for (int j = 0; j < NUMPIXELS; j++) { // clears the strip
-    clearPixels(j);
-  }
-  for (int j = 0; j < k; j++) { // decides length
-    leds.setPixel(j, i, i, i); // decides brightness
+void colorWipe(int color, int wait_us) {
+  for (int i = 0; i < leds.numPixels(); i++) {
+    leds.setPixel(i, color);
+    leds.show();
+    delayMicroseconds(wait_us);
   }
 }
 
@@ -58,121 +79,173 @@ void clearPixels(int i) { // clears a block of pixels
   }
 }
 
-void clearPixel(int i) { // clears a block of pixels
+void clearPixel(int i) { // clears a pixel
   leds.setPixel(i, 0, 0, 0); // off
 }
 
-void memoryRiver() {
-  for (int j = 0; j < SAMPLES; j++) { // step through each sample
-    int pixel = data[j][1]; // get index no
-    if (pixel < NUMPIXELS) { // check if sample is active
-      int sampleDuration = data[j][5]; // get duration
-      int velocity = data[j][6]; // get velocity
-
-      int v2 = int(map(velocity, 0, 31, 0, 255)); // scale up to fit gamma array range
-      //      Serial.println(v2);
-      int v3 = gammaArray[v2]; // adjusts the brightness using the gamma array
-      //      Serial.println(v3);
-      int v4 = int(map(v3, 0, 255, 0, 31)); // scale back down to fit normal range
-      //      Serial.println(v4);
-      velocity = v4;
-      //      Serial.println(velocity);
-
-      //      Serial.println(sampleDuration);
-      for (int d = 0; d < sampleDuration; d++) { // print duration
-        leds.setPixel(pixel, velocity * data[j][2], velocity * data[j][3], velocity * data[j][4]);
-        clearPixel(pixel - sampleDuration - 1); // clear trailing pixel
-        //        Serial.println(freeMemory());
-      }
-
-      int spriteLength = sizeof(sprite) / sizeof(uint8_t);
-      for (int k = 0; k < spriteLength; k++) {  // print end sprite
-        //      Serial.print(clearFlag);
-        //              Serial.println("PRINT");
-        // set pixel colour based on sprite shape and sample colour values
-        leds.setPixel(pixel - k - sampleDuration, sprite[k]* data[j][2], sprite[k]* data[j][3], sprite[k]* data[j][4]);
-        clearPixel(pixel - k - sampleDuration - 1); // clear trailing pixel
-      }
+void alternatePixels() { // clear every other pixel
+  for (int i = 0; i < NUMPIXELS; i++) {
+    if (i % 2 == 0) {
+      clearPixel(i);
+      //      Serial.println(i);
     }
   }
-  leds.show(); // This sends the updated pixel colors to the hardware.
 }
 
-void builder() {
-  if (buttonState == true) { // if button is pressed
-    int sampleDuration2 = int(data[nextSample][5] / 2); // get duration 
-    for (int i = 0; i < sampleDuration2; i++) {
-      float sampleDuration = data[nextSample][5]; // get duration - different variable to last time though
-      sampleDuration = constrain(sampleDuration, 0, 300); // limit the duration range
-      sampleDuration = map(sampleDuration, 0, 300, 31, 255); // scale duration to gamma range
-      sampleDuration = gammaArray[int(sampleDuration)]; // adjusts the brightness using the gamma array
-      sampleDuration = map(sampleDuration, 1, 255, 1, 31); // scale back down to fit brightness range
-      Serial.println(sampleDuration);
-      leds.setPixel((NUMPIXELS / 4) + i, int(sampleDuration * data[nextSample][2]), int(sampleDuration * data[nextSample][3]), int(sampleDuration * data[nextSample][4])); // set the pixel
-      leds.setPixel((NUMPIXELS / 4) - i, int(sampleDuration * data[nextSample][2]), int(sampleDuration * data[nextSample][3]), int(sampleDuration * data[nextSample][4])); // set the pixel
-    }
-  }
-  else
-  {
-    clearStrip(); // clear everything
-    // as before but now for lastSample as deTriggering moves the data on in the array.
-    int sampleDuration2 = int(data[lastSample][5] / 2); // get duration
-    for (int i = 0; i < sampleDuration2; i++) {
-      float sampleDuration = data[lastSample][5]; // get duration - different variable to last time though
-      sampleDuration = constrain(sampleDuration, 0, 300); // limit the duration range
-      sampleDuration = map(sampleDuration, 0, 300, 31, 255); // scale duration to gamma range
-      sampleDuration = gammaArray[int(sampleDuration)]; // adjusts the brightness using the gamma array
-      sampleDuration = map(sampleDuration, 1, 255, 1, 31); // scale back down to fit brightness range
-      Serial.println(sampleDuration);
-      leds.setPixel((NUMPIXELS / 4) + i, int(sampleDuration * data[lastSample][2]), int(sampleDuration * data[lastSample][3]), int(sampleDuration * data[lastSample][4])); // set the pixel
-      leds.setPixel((NUMPIXELS / 4) - i, int(sampleDuration * data[lastSample][2]), int(sampleDuration * data[lastSample][3]), int(sampleDuration * data[lastSample][4])); // set the pixel
-    }
-    data[lastSample][5]=data[lastSample][5]-2; // gradually decrease the lastSample duration
-  }
-  leds.show(); // This sends the updated pixel colors to the hardware.
-}
+void render() {
+  for (int j = 0; j < NUMPULSES; j++) { // step through each sample
+    int pixel = pulses[j].position; // get index no
+    if (pulses[j].active) { // check if sample is active
 
-void responder(int responderPixel) {
-  for (int j = 0; j < SAMPLES; j++) { // step through each sample
-    int pixel = data[j][1]; // get index no
-    if (pixel < NUMPIXELS) { // check if sample is active
-      int sampleDuration = data[j][5]; // get duration
-      int velocity = data[j][6]; // get velocity
+      int sampleDuration = pulses[j].hold; // get duration
+      int velocity = pulses[j].velocity; // get velocity
+      int vector = pulses[j].vector; // get vector
+      bool collision = pulses[j].collision; // get collision state
+      Pulse collidingPulse = pulses[pulses[j].colliding];
 
+      // initialise colour variables
+      int red = 0;
+      int green = 0;
+      int blue = 0;
+      int white = 0;
+
+      //get the colours from the collision palette
+      int redC = paletteC[0];
+      int greenC = paletteC[1];
+      int blueC = paletteC[2];
+      int whiteC = paletteC[3];
+
+      // gamma correction
       int v2 = int(map(velocity, 0, 31, 0, 255)); // scale up to fit gamma array range
-      //      Serial.println(v2);
       int v3 = gammaArray[v2]; // adjusts the brightness using the gamma array
-      //      Serial.println(v3);
       int v4 = int(map(v3, 0, 255, 0, 31)); // scale back down to fit normal range
-      //      Serial.println(v4);
       velocity = v4;
-      //      Serial.println(velocity);
 
-      //      Serial.println(sampleDuration);
-      for (int d = 0; d < sampleDuration; d++) { // print duration
-        leds.setPixel(pixel, velocity * data[j][2], velocity * data[j][3], velocity * data[j][4]);
-        if (pixel > responderPixel) {
-          leds.setPixel(pixel, velocity * 7, 0, 0);
+      if (vector == 0) {
+
+        //get colours from palette A
+        int redA = paletteA[pulses[j].seed][0];
+        int greenA = paletteA[pulses[j].seed][1];
+        int blueA = paletteA[pulses[j].seed][2];
+        int whiteA = paletteA[pulses[j].seed][3];
+
+        // print hold/duration/sustain
+        int red = velocity * redA;
+        int green = velocity * greenA;
+        int blue = velocity * blueA;
+        int white = velocity * whiteA;
+        for (int d = 0; d < sampleDuration; d++) { // print duration
+          if (collision) {
+            if (pulses[j].crossoverZone(d, collidingPulse)) { // check if this pixel is within the crossover zone (offset position, index of colliding pulse)
+              red = velocity * redC;
+              green = velocity * greenC;
+              blue = velocity * blueC;
+              white = velocity * whiteC;
+              //              Serial.print(pulses[j].index);
+              //              Serial.print(", ");
+              //              Serial.print(d);
+              //              Serial.print(", ");
+              //              Serial.println("HERE");
+            } else {
+              red = velocity * redA;
+              green = velocity * greenA;
+              blue = velocity * blueA;
+              white = velocity * whiteA;
+            }
+          }
+          int position = pixel - d;
+          leds.setPixel(position, red, green, blue, white); // set this pixel
+          clearPixel(pixel - sampleDuration - 1); // clear trailing pixel
         }
-        clearPixel(pixel - sampleDuration - 1); // clear trailing pixel
-        //        Serial.println(freeMemory());
+
+        // print trailing sprite
+        int spriteLength = sizeof(sprite) / sizeof(uint8_t);
+        for (int k = 0; k < spriteLength; k++) {  // print end sprite
+          int red = sprite[k] * redA;
+          int green = sprite[k] * greenA;
+          int blue = sprite[k] * blueA;
+          int white = sprite[k] * whiteA;
+          if (collision) {
+            if (pulses[j].crossoverZone(k + sampleDuration, collidingPulse)) { // check if this pixel is within the crossover zone
+              red = sprite[k] * redC;
+              green = sprite[k] * greenC;
+              blue = sprite[k] * blueC;
+              white = sprite[k] * whiteC;
+            } else {
+              red = sprite[k] * redA;
+              green = sprite[k] * greenA;
+              blue = sprite[k] * blueA;
+              white = sprite[k] * whiteA;
+            }
+          }
+          // set pixel colour based on sprite shape and sample colour values
+          int position = pixel - k - sampleDuration;
+          leds.setPixel(position, red, green, blue, white);
+          clearPixel(position - 1); // clear trailing pixel
+        }
       }
 
-      int spriteLength = sizeof(sprite) / sizeof(uint8_t);
-      for (int k = 0; k < spriteLength; k++) {  // print end sprite
-        //      Serial.print(clearFlag);
-        //              Serial.println("PRINT");
-        // set pixel colour based on sprite shape and sample colour values
-        leds.setPixel(pixel - k - sampleDuration, sprite[k]* data[j][2], sprite[k]* data[j][3], sprite[k]* data[j][4]);
-        if (pixel - k - sampleDuration > responderPixel) {
-          leds.setPixel(pixel - k - sampleDuration, sprite[k] * 7, 0, 0);
+      if (vector == 1) {
+        //get colours from palette B
+        int redB = paletteB[pulses[j].seed][0];
+        int greenB = paletteB[pulses[j].seed][1];
+        int blueB = paletteB[pulses[j].seed][2];
+        int whiteB = paletteB[pulses[j].seed][3];
+
+        // print hold/duration/sustain
+        int red = velocity * redB;
+        int green = velocity * greenB;
+        int blue = velocity * blueB;
+        int white = velocity * whiteB;
+        for (int d = 0; d < sampleDuration; d++) { // print duration
+          if (collision) {
+            if (pulses[j].crossoverZone(-d, collidingPulse)) { // check if this pixel is within the crossover zone
+              red = velocity * redC;
+              green = velocity * greenC;
+              blue = velocity * blueC;
+              white = velocity * whiteC;
+            } else {
+              red = velocity * redB;
+              green = velocity * greenB;
+              blue = velocity * blueB;
+              white = velocity * whiteB;
+            }
+          }
+          int position = pixel + d;
+          leds.setPixel(position, red, green, blue,  white);
+          clearPixel(pixel + sampleDuration + 1); // clear trailing pixel
         }
-        clearPixel(pixel - k - sampleDuration - 1); // clear trailing pixel
+
+        // print trailing sprite
+        int spriteLength = sizeof(sprite) / sizeof(uint8_t);
+        for (int k = 0; k < spriteLength; k++) {  // print end sprite
+          int red = sprite[k] * redB;
+          int green = sprite[k] * greenB;
+          int blue = sprite[k] * blueB;
+          int white = sprite[k] * whiteB;
+          if (collision) {
+            if (pulses[j].crossoverZone(-k - sampleDuration, collidingPulse)) { // check if this pixel is within the crossover zone
+              red = sprite[k] * redC;
+              green = sprite[k] * greenC;
+              blue = sprite[k] * blueC;
+              white = sprite[k] * whiteC;
+            } else {
+              red = sprite[k] * redB;
+              green = sprite[k] * greenB;
+              blue = sprite[k] * blueB;
+              white = sprite[k] * whiteB;
+            }
+          }
+          // set pixel colour based on sprite shape and sample colour values
+          int position = pixel + k + sampleDuration;
+          leds.setPixel(position, red, green, blue, white);
+          clearPixel(position + 1); // clear trailing pixel
+        }
       }
     }
   }
-  leds.setPixel(responderPixel, 255, 0, 0);
-  leds.setPixel(responderPixel + 1, 255, 0, 0);
-  leds.setPixel(responderPixel + 2, 255, 0, 0);
+
+  //  alternatePixels();
+
   leds.show(); // This sends the updated pixel colors to the hardware.
 }
